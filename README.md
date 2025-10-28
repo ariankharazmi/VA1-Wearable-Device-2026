@@ -1,11 +1,11 @@
 # Wearable-Device-2026
 
 ## Wearable Summary:
-Compute: Raspberry Pi Zero 2W
+Compute: Radxa Zero 2 Pro
 
 Display: High-resolution Sony display 
 
-OS: piOS 64bit 
+OS: Debian
 
 UI & Main Processing Stack: Custom UI & Processing Stacks built w/ Python
 
@@ -18,11 +18,11 @@ Strengths: Handsfree navigation, new medium for information delivery, and automa
 Wearable Device 2026 serves as tool for improving workplace and occupational outcomes. Automate a task via voice, capture your POV, or get mobile notifications without taking out your phone or PC, and much more.
 
 ## Phase 1 Hardware
-* Raspberry Pi Zero 2W
+* Radxa Zero 2 Pro
 * Sony micro-display
 * Touchpad sensor
 * Rotary Encoder Controls for navigation & volume
-* Pi Camera Module 3
+* Camera Module (w/ Night Vision)
 * LED Status for video & photo capture indication
 
 ## Phase 2 Software
