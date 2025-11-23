@@ -19,6 +19,17 @@ try:
 except Exception:
     cv2 = None
 
+# Optional: local LLM + translation
+try:
+    import ollama
+except Exception:
+    ollama = None
+
+try:
+    from deep_translator import GoogleTranslator
+except Exception:
+    GoogleTranslator = None
+
 import platform
 
 IS_PI = (
@@ -328,6 +339,9 @@ class VAApp(ctk.CTk):
 
         # Assistant state
         self.assistant_history_widget = None
+        self.assistant_chat_history = []
+        # Use your installed Ollama model here
+        self.assistant_model_name = "gemma3:4b"
 
         # Camera state
         self.camera_label = None
@@ -352,13 +366,12 @@ class VAApp(ctk.CTk):
             "gps": self.show_track,
         }
 
-        # Key bindings
-        self.bind("<Left>", lambda e: self.nav(-1))
-        self.bind("<Right>", lambda e: self.nav(+1))
-        self.bind("<Return>", lambda e: self.open_current())
-        self.bind("<space>", lambda e: self.open_current())
-        self.bind("h", lambda e: self.go_home())
-        self.bind("<Escape>", lambda e: self.quit())
+        # Key bindings – routed through handlers so we can ignore when typing
+        self.bind("<Left>", self._on_left_key)
+        self.bind("<Right>", self._on_right_key)
+        self.bind("<Return>", self._on_return_key)
+        self.bind("<space>", self._on_space_key)
+        self.bind("<Escape>", self._on_escape_key)
 
         self.bind_all("<MouseWheel>", self._wheel)
         self.bind_all("<Button-4>", lambda e: self.nav(+1))
@@ -366,6 +379,35 @@ class VAApp(ctk.CTk):
 
         self._last_time = time.perf_counter()
         self._tick()
+
+    # -------- key handlers (fully fixed typing rules) --------
+
+    def _is_text_widget(self, widget=None):
+        """Return True if ANY text widget is currently focused."""
+        focused = self.focus_get()
+        return isinstance(focused, (ctk.CTkEntry, ctk.CTkTextbox))
+
+    def _on_left_key(self, event):
+        if self.current_view == "home" and not self._is_text_widget():
+            self.nav(-1)
+
+    def _on_right_key(self, event):
+        if self.current_view == "home" and not self._is_text_widget():
+            self.nav(+1)
+
+    def _on_return_key(self, event):
+        if self.current_view == "home" and not self._is_text_widget():
+            self.open_current()
+
+    def _on_space_key(self, event):
+        if self.current_view == "home" and not self._is_text_widget():
+            self.open_current()
+
+    def _on_escape_key(self, event):
+    # Escape ALWAYS returns to home view
+        if self.current_view != "home":
+            self.go_home()
+
 
     # -------- navigation --------
 
@@ -435,7 +477,7 @@ class VAApp(ctk.CTk):
 
         hint_label = ctk.CTkLabel(
             self.view_frame,
-            text="Press H to return to Home",
+            text="Press ESC to return to Home",
             font=("Helvetica", 14),
         )
         hint_label.pack(pady=16)
@@ -457,13 +499,17 @@ class VAApp(ctk.CTk):
             view_id="assistant",
             title="Assistant",
             body="Voice + text assistant (local MVP demo).\n"
-            "Type a message below – it can answer simple math and echo questions.",
+            "Type a message below – powered by a local Ollama model when available.",
             placeholder_text=False,
         )
 
         history = ctk.CTkTextbox(frame, font=("Consolas", 14), wrap="word")
         history.pack(side="top", fill="both", expand=True, padx=10, pady=(10, 5))
         history.insert("end", "Assistant: Hi! How can I help you today?\n")
+        if ollama is not None:
+            history.insert("end", f"(Model: {self.assistant_model_name} via Ollama)\n\n")
+        else:
+            history.insert("end", "(Local math/demo fallback – Ollama not available)\n\n")
         history.configure(state="disabled")
 
         input_frame = ctk.CTkFrame(frame)
@@ -479,6 +525,7 @@ class VAApp(ctk.CTk):
 
         self.assistant_history_widget = history
         entry.bind("<Return>", lambda e: self._assistant_send(entry, history))
+        entry.focus_set()
 
     def _assistant_send(self, entry: ctk.CTkEntry, history: ctk.CTkTextbox):
         msg = entry.get().strip()
@@ -489,12 +536,46 @@ class VAApp(ctk.CTk):
         history.configure(state="normal")
         history.insert("end", f"You: {msg}\n")
 
-        # Very simple “AI” for MVP: math + generic reply
-        reply = self._assistant_local_reply(msg)
+        # Prefer local LLM via Ollama if available, otherwise fallback
+        if ollama is not None:
+            reply = self._assistant_model_reply(msg)
+        else:
+            reply = self._assistant_local_reply(msg)
 
         history.insert("end", f"Assistant: {reply}\n\n")
         history.configure(state="disabled")
         history.see("end")
+
+    def _assistant_model_reply(self, msg: str) -> str:
+        """Use local Ollama model for replies."""
+        if not ollama:
+            return self._assistant_local_reply(msg)
+
+        try:
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an AI assistant running locally on a pair of smart glasses. "
+                        "Give short, clear answers that are easy to read on a small display."
+                    ),
+                }
+            ]
+            messages.extend(self.assistant_chat_history)
+            messages.append({"role": "user", "content": msg})
+
+            resp = ollama.chat(
+                model=self.assistant_model_name,
+                messages=messages,
+            )
+            answer = resp.get("message", {}).get("content", "").strip() or "[No response]"
+
+            self.assistant_chat_history.append({"role": "user", "content": msg})
+            self.assistant_chat_history.append({"role": "assistant", "content": answer})
+
+            return answer
+        except Exception as e:
+            return f"(Local LLM error: {e})"
 
     def _assistant_local_reply(self, msg: str) -> str:
         # simple math handling
@@ -613,8 +694,7 @@ class VAApp(ctk.CTk):
             view_id="translate",
             title="Translate",
             body="Simple text translation MVP.\n"
-            "For now this uses a tiny built-in dictionary and a stub.\n"
-            "Later you can hook this into a real translation API.",
+            "Uses deep-translator (GoogleTranslator) when available.",
             placeholder_text=False,
         )
 
@@ -623,7 +703,7 @@ class VAApp(ctk.CTk):
 
         ctk.CTkLabel(top_frame, text="Target language:").pack(side="left", padx=(0, 8))
 
-        languages = ["Japanese", "Spanish", "French"]
+        languages = ["Japanese", "Spanish", "French", "Korean", "German", "Chinese"]
         lang_var = ctk.StringVar(value="Japanese")
         lang_menu = ctk.CTkOptionMenu(top_frame, values=languages, variable=lang_var)
         lang_menu.pack(side="left")
@@ -631,6 +711,7 @@ class VAApp(ctk.CTk):
         src_box = ctk.CTkTextbox(frame, height=160, font=("Helvetica", 14))
         src_box.pack(fill="x", padx=10, pady=(10, 5))
         src_box.insert("end", "Hello, how are you?")
+        src_box.focus_set()
 
         tgt_box = ctk.CTkTextbox(frame, height=160, font=("Helvetica", 14))
         tgt_box.pack(fill="x", padx=10, pady=(5, 10))
@@ -646,12 +727,37 @@ class VAApp(ctk.CTk):
             tgt_box.insert("end", result)
             tgt_box.configure(state="disabled")
 
-        ctk.CTkButton(frame, text="Translate (demo)", command=do_translate).pack(
+        ctk.CTkButton(frame, text="Translate", command=do_translate).pack(
             pady=(0, 10)
         )
 
     def _local_translate(self, text: str, lang: str) -> str:
-        # Extremely tiny dictionary just to show *actual* change
+        """
+        Use deep-translator (GoogleTranslator) if installed.
+        Falls back to a tiny dictionary if unavailable.
+        """
+        if not text.strip():
+            return ""
+
+        # Real translation path
+        if GoogleTranslator is not None:
+            lang_map = {
+                "Japanese": "ja",
+                "Spanish": "es",
+                "French": "fr",
+                "Korean": "ko",
+                "German": "de",
+                "Chinese": "zh-cn",
+            }
+            target_code = lang_map.get(lang, "en")
+            try:
+                translator = GoogleTranslator(source="auto", target=target_code)
+                translated = translator.translate(text)
+                return translated
+            except Exception as e:
+                return f"Translation error: {e}"
+
+        # Fallback: tiny demo dictionary
         small_dict = {
             ("Hello", "Japanese"): "こんにちは",
             ("Hello", "Spanish"): "Hola",
@@ -663,7 +769,10 @@ class VAApp(ctk.CTk):
             if base:
                 return f"{base}  (local demo translation to {lang})"
 
-        return f"{text}\n\n[Demo] Pretend this is translated into {lang}.\nA real API can replace this later."
+        return (
+            f"{text}\n\n[Demo] deep-translator is not installed.\n"
+            f"Pretend this is translated into {lang}."
+        )
 
     # -------- Settings --------
 
